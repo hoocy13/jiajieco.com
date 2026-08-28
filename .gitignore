@@ -1,0 +1,7 @@
+# Local page backups
+*-backup.html
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
