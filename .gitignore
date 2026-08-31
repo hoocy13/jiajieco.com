@@ -1,7 +1,11 @@
 # Local page backups
 *-backup.html
 
+# Generated background drafts
+assets/company-floral-background-v1.png
+assets/company-floral-background-v2.png
+assets/company-floral-background-v3.png
+
 # Operating system files
 .DS_Store
 Thumbs.db
-
