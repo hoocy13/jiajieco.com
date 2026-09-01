@@ -1,0 +1,106 @@
+name: Deploy Company Website
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: jiajieco-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Tencent Cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build archive
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=.github \
+            -czf "$RUNNER_TEMP/jiajieco-deploy.tar.gz" .
+
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.TENCENT_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.TENCENT_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload archive
+        env:
+          DEPLOY_HOST: ${{ secrets.TENCENT_HOST }}
+          DEPLOY_USER: ${{ secrets.TENCENT_USER }}
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            "$RUNNER_TEMP/jiajieco-deploy.tar.gz" \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/jiajieco-deploy.tar.gz"
+
+      - name: Deploy on server
+        env:
+          DEPLOY_HOST: ${{ secrets.TENCENT_HOST }}
+          DEPLOY_USER: ${{ secrets.TENCENT_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR="/www/wwwroot/jiajieco.com"
+          ARCHIVE="/tmp/jiajieco-deploy.tar.gz"
+          TS=$(date +%Y%m%d%H%M%S)
+          RELEASE="/www/wwwroot/jiajieco.com.release.$TS"
+          BACKUP="/www/wwwroot/jiajieco.com.backup.$TS"
+          FAILED="/www/wwwroot/jiajieco.com.failed.$TS"
+
+          rollback() {
+            exit_code=$?
+            if [ "$exit_code" -ne 0 ] && [ -d "$BACKUP" ]; then
+              echo "Deploy failed; restoring previous release."
+              if [ -d "$APP_DIR" ]; then
+                mv "$APP_DIR" "$FAILED"
+              fi
+              mv "$BACKUP" "$APP_DIR"
+              echo "Rollback finished."
+            fi
+            exit "$exit_code"
+          }
+          trap rollback ERR
+
+          mkdir -p "$RELEASE"
+          tar -xzf "$ARCHIVE" -C "$RELEASE"
+
+          test -f "$RELEASE/index.html"
+          test -f "$RELEASE/robots.txt"
+          test -f "$RELEASE/sitemap.xml"
+          test -f "$RELEASE/baidu_verify_codeva-1jBpoMnqIw.html"
+          test -f "$RELEASE/BingSiteAuth.xml"
+
+          find "$RELEASE" -type d -exec chmod 755 {} +
+          find "$RELEASE" -type f -exec chmod 644 {} +
+
+          if [ -d "$APP_DIR" ]; then
+            mv "$APP_DIR" "$BACKUP"
+          fi
+          mv "$RELEASE" "$APP_DIR"
+
+          curl -kfsS --resolve jiajieco.com:443:127.0.0.1 \
+            https://jiajieco.com/ | grep -q "多元渠道"
+
+          rm -f "$ARCHIVE"
+          trap - ERR
+          echo "Deploy finished."
+          echo "Backup: $BACKUP"
+          REMOTE
+
+      - name: Verify production
+        run: |
+          curl -fsS https://jiajieco.com/ | grep -q "多元渠道"
+          curl -fsS https://jiajieco.com/robots.txt >/dev/null
+          curl -fsS https://jiajieco.com/sitemap.xml >/dev/null
+
